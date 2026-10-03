@@ -1,0 +1,110 @@
+services:
+  order-db:
+    image: postgres:16-alpine
+    container_name: order-db
+    environment:
+      POSTGRES_DB: ${ORDER_DB_NAME:-order_db}
+      POSTGRES_USER: ${ORDER_DB_USER:-order_user}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
+    ports:
+      - "5433:5432"
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDER_DB_USER:-order_user} -d ${ORDER_DB_NAME:-order_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - orders-net
+
+  inventory-db:
+    image: postgres:16-alpine
+    container_name: inventory-db
+    environment:
+      POSTGRES_DB: ${INVENTORY_DB_NAME:-inventory_db}
+      POSTGRES_USER: ${INVENTORY_DB_USER:-inventory_user}
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory_pass}
+    ports:
+      - "5434:5432"
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${INVENTORY_DB_USER:-inventory_user} -d ${INVENTORY_DB_NAME:-inventory_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - orders-net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports:
+      - "8081:8080"
+    networks:
+      - orders-net
+
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    environment:
+      DB_HOST: order-db
+      DB_PORT: "5432"
+      DB_NAME: ${ORDER_DB_NAME:-order_db}
+      DB_USER: ${ORDER_DB_USER:-order_user}
+      DB_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
+      INVENTORY_SERVICE_BASE_URL: http://inventory-service:8083
+    ports:
+      - "8082:8082"
+    depends_on:
+      order-db:
+        condition: service_healthy
+    networks:
+      - orders-net
+
+  inventory-service:
+    build: ./inventory-service
+    container_name: inventory-service
+    environment:
+      DB_HOST: inventory-db
+      DB_PORT: "5432"
+      DB_NAME: ${INVENTORY_DB_NAME:-inventory_db}
+      DB_USER: ${INVENTORY_DB_USER:-inventory_user}
+      DB_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory_pass}
+    ports:
+      - "8083:8083"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    networks:
+      - orders-net
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    environment:
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8081/realms/pedidos-realm
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/pedidos-realm/protocol/openid-connect/certs
+      ORDER_SERVICE_BASE_URL: http://order-service:8082
+      INVENTORY_SERVICE_BASE_URL: http://inventory-service:8083
+    ports:
+      - "8080:8080"
+    depends_on:
+      - order-service
+      - inventory-service
+      - keycloak
+    networks:
+      - orders-net
+
+volumes:
+  order-db-data:
+  inventory-db-data:
+
+networks:
+  orders-net:
+    driver: bridge
